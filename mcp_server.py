@@ -7,10 +7,12 @@ import os
 import json
 import uvicorn
 import secrets
+import asyncio
 from typing import Dict, List, Any, Optional
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Depends, Security
+from fastapi import FastAPI, HTTPException, Depends, Security, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 # Load environment variables
@@ -170,6 +172,45 @@ async def fetch_tool(request: FetchRequest, authorized: bool = Depends(verify_ap
 async def health_check():
     """Health check endpoint"""
     return {"status": "healthy", "timestamp": "2025-06-08"}
+
+@app.post("/sse")
+async def sse_endpoint(request: Request, authorized: bool = Depends(verify_api_key)):
+    """SSE endpoint for ChatGPT integration"""
+    async def event_generator():
+        while True:
+            if await request.is_disconnected():
+                break
+
+            # Process any incoming messages
+            if await request.body():
+                body = await request.json()
+                tool_name = body.get("name")
+                arguments = body.get("arguments", {})
+                
+                # Handle tool calls
+                if tool_name == "search":
+                    result = await search_tool(SearchRequest(query=arguments.get("query", "")))
+                elif tool_name == "fetch":
+                    result = await fetch_tool(FetchRequest(doc_id=arguments.get("doc_id", "")))
+                else:
+                    result = ToolResponse(result="Unknown tool", status="error")
+                
+                # Send the result
+                yield f"data: {json.dumps(result.dict())}\n\n"
+            
+            await asyncio.sleep(1)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization",
+        }
+    )
 
 def main():
     """Run the server"""
