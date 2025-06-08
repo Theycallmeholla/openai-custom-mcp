@@ -219,16 +219,32 @@ async def oauth_config():
     """OAuth authorization server configuration"""
     return JSONResponse({
         "issuer": "https://mcp.crsv.me",
-        "authorization_endpoint": "https://mcp.crsv.me/oauth/authorize",
         "token_endpoint": "https://mcp.crsv.me/oauth/token",
-        "token_endpoint_auth_methods_supported": ["client_secret_basic"],
-        "token_endpoint_auth_signing_alg_values_supported": ["RS256"],
-        "scopes_supported": ["tools"],
-        "response_types_supported": ["token"],
+        "registration_endpoint": "https://mcp.crsv.me/oauth/register",
         "grant_types_supported": ["client_credentials"],
+        "token_endpoint_auth_methods_supported": ["none"],
         "service_documentation": "https://mcp.crsv.me/docs",
-        "token_endpoint_auth_signing_alg": "RS256"
+        "response_types_supported": ["token"],
+        "scopes_supported": ["tools.read", "tools.write"]
     })
+
+@app.post("/oauth/register")
+async def register_client(request: Request):
+    """OAuth client registration endpoint"""
+    try:
+        body = await request.json()
+        return JSONResponse({
+            "client_id": "mcp_client",
+            "client_secret": API_KEY,
+            "client_id_issued_at": 1683000000,
+            "client_secret_expires_at": 0,
+            "application_type": "web",
+            "grant_types": ["client_credentials"],
+            "token_endpoint_auth_method": "none",
+            "scope": "tools.read tools.write"
+        })
+    except:
+        raise HTTPException(status_code=400, detail="Invalid request")
 
 @app.post("/oauth/token")
 async def token_endpoint(request: Request):
@@ -237,17 +253,7 @@ async def token_endpoint(request: Request):
         "access_token": API_KEY,
         "token_type": "Bearer",
         "expires_in": 3600,
-        "scope": "tools"
-    })
-
-@app.get("/oauth/authorize")
-async def authorize_endpoint(request: Request):
-    """OAuth authorization endpoint"""
-    return JSONResponse({
-        "access_token": API_KEY,
-        "token_type": "Bearer",
-        "expires_in": 3600,
-        "scope": "tools"
+        "scope": "tools.read tools.write"
     })
 
 def main():
