@@ -57,10 +57,7 @@ SAMPLE_DATA = [
 # Pydantic models
 class SearchRequest(BaseModel):
     query: str
-
-class SearchResponse(BaseModel):
-    results: List[Dict[str, Any]]
-
+    
 class FetchRequest(BaseModel):
     doc_id: str
 
@@ -96,7 +93,7 @@ async def root():
         "name": SERVER_NAME,
         "version": "1.0.0",
         "status": "running",
-        "actions": ["search"],
+        "tools": ["search", "fetch"],
         "documents": len(SAMPLE_DATA)
     }
 
@@ -135,114 +132,25 @@ async def list_tools(authorized: bool = Depends(verify_api_key)):
     ]
     return MCPResponse(tools=tools)
 
-@app.get("/.well-known/mcp.json")
-async def mcp_config():
-    """MCP configuration endpoint"""
-    return JSONResponse({
-        "schema_version": "v1",
-        "name_for_human": "MCP Knowledge Base",
-        "name_for_model": "mcp_knowledge_base",
-        "description_for_human": "Search through the knowledge base",
-        "description_for_model": "Use this to search through documents in the knowledge base",
-        "auth": {
-            "type": "oauth",
-            "client_url": "https://mcp.crsv.me/oauth/register",
-            "scope": "search",
-            "authorization_url": "https://mcp.crsv.me/oauth/authorize",
-            "token_url": "https://mcp.crsv.me/oauth/token"
-        },
-        "api": {
-            "type": "openapi",
-            "url": "https://mcp.crsv.me/.well-known/openapi.json"
-        },
-        "actions": [{
-            "name": "search",
-            "description": "Search through the knowledge base",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "The search query"
-                    }
-                },
-                "required": ["query"]
-            }
-        }]
-    })
-
-@app.get("/.well-known/openapi.json")
-async def openapi_spec():
-    """OpenAPI specification"""
-    return JSONResponse({
-        "openapi": "3.0.1",
-        "info": {
-            "title": "MCP Knowledge Base API",
-            "version": "v1"
-        },
-        "paths": {
-            "/search": {
-                "post": {
-                    "operationId": "search",
-                    "summary": "Search through the knowledge base",
-                    "requestBody": {
-                        "required": True,
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "type": "object",
-                                    "properties": {
-                                        "query": {
-                                            "type": "string",
-                                            "description": "The search query"
-                                        }
-                                    },
-                                    "required": ["query"]
-                                }
-                            }
-                        }
-                    },
-                    "responses": {
-                        "200": {
-                            "description": "Search results",
-                            "content": {
-                                "application/json": {
-                                    "schema": {
-                                        "type": "object",
-                                        "properties": {
-                                            "results": {
-                                                "type": "array",
-                                                "items": {
-                                                    "type": "object",
-                                                    "properties": {
-                                                        "id": {"type": "string"},
-                                                        "title": {"type": "string"},
-                                                        "text": {"type": "string"}
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    })
-
-@app.post("/search")
-async def search(request: SearchRequest, authorized: bool = Depends(verify_api_key)):
-    """Search the knowledge base"""
-    query = request.query.lower()
+@app.post("/tools/search", response_model=ToolResponse)
+async def search_tool(request: SearchRequest, authorized: bool = Depends(verify_api_key)):
+    """Search the knowledge base for relevant documents"""
+    query = request.query
     results = []
     
     for doc in SAMPLE_DATA:
-        if query in doc["title"].lower() or query in doc["text"].lower():
+        if query.lower() in doc["title"].lower() or query.lower() in doc["text"].lower():
             results.append(doc)
     
-    return SearchResponse(results=results)
+    if not results:
+        return ToolResponse(result="No matching documents found.")
+    
+    formatted_results = []
+    for doc in results:
+        formatted_results.append(f"Title: {doc['title']}\nContent: {doc['text']}\n")
+    
+    result = "\n".join(formatted_results)
+    return ToolResponse(result=result)
 
 @app.post("/tools/fetch", response_model=ToolResponse)
 async def fetch_tool(request: FetchRequest, authorized: bool = Depends(verify_api_key)):
@@ -280,7 +188,7 @@ async def sse_endpoint(request: Request, authorized: bool = Depends(verify_api_k
                 
                 # Handle tool calls
                 if tool_name == "search":
-                    result = await search(SearchRequest(query=arguments.get("query", "")))
+                    result = await search_tool(SearchRequest(query=arguments.get("query", "")))
                 elif tool_name == "fetch":
                     result = await fetch_tool(FetchRequest(doc_id=arguments.get("doc_id", "")))
                 else:
@@ -305,6 +213,21 @@ async def sse_endpoint(request: Request, authorized: bool = Depends(verify_api_k
             "Access-Control-Allow-Headers": "Content-Type, Authorization",
         }
     )
+
+@app.get("/.well-known/oauth-authorization-server")
+async def oauth_config():
+    """OAuth authorization server configuration"""
+    return JSONResponse({
+        "issuer": "https://mcp.crsv.me",
+        "authorization_endpoint": "https://mcp.crsv.me/oauth/authorize",
+        "token_endpoint": "https://mcp.crsv.me/oauth/token",
+        "registration_endpoint": "https://mcp.crsv.me/oauth/register",
+        "grant_types_supported": ["client_credentials", "authorization_code"],
+        "token_endpoint_auth_methods_supported": ["none"],
+        "service_documentation": "https://mcp.crsv.me/docs",
+        "response_types_supported": ["token", "code"],
+        "scopes_supported": ["tools.read", "tools.write"]
+    })
 
 @app.get("/oauth/authorize")
 async def authorize_endpoint(
