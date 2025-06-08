@@ -12,7 +12,7 @@ from typing import Dict, List, Any, Optional
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Depends, Security, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 
 # Load environment variables
@@ -213,6 +213,42 @@ async def sse_endpoint(request: Request, authorized: bool = Depends(verify_api_k
             "Access-Control-Allow-Headers": "Content-Type, Authorization",
         }
     )
+
+@app.get("/.well-known/oauth-authorization-server")
+async def oauth_config():
+    """OAuth authorization server configuration"""
+    return JSONResponse({
+        "issuer": "https://mcp.crsv.me",
+        "authorization_endpoint": "https://mcp.crsv.me/oauth/authorize",
+        "token_endpoint": "https://mcp.crsv.me/oauth/token",
+        "token_endpoint_auth_methods_supported": ["client_secret_basic"],
+        "token_endpoint_auth_signing_alg_values_supported": ["RS256"],
+        "scopes_supported": ["tools"],
+        "response_types_supported": ["token"],
+        "grant_types_supported": ["client_credentials"],
+        "service_documentation": "https://mcp.crsv.me/docs",
+        "token_endpoint_auth_signing_alg": "RS256"
+    })
+
+@app.post("/oauth/token")
+async def token_endpoint(request: Request):
+    """OAuth token endpoint"""
+    return JSONResponse({
+        "access_token": API_KEY,
+        "token_type": "Bearer",
+        "expires_in": 3600,
+        "scope": "tools"
+    })
+
+@app.get("/oauth/authorize")
+async def authorize_endpoint(request: Request):
+    """OAuth authorization endpoint"""
+    return JSONResponse({
+        "access_token": API_KEY,
+        "token_type": "Bearer",
+        "expires_in": 3600,
+        "scope": "tools"
+    })
 
 def main():
     """Run the server"""
