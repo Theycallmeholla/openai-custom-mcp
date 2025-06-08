@@ -1,206 +1,324 @@
 #!/usr/bin/env python3
 """
-Secure MCP Server with environment-based configuration
+MCP Server with Streamable HTTP transport for ChatGPT Deep Research
+Based on OpenAI's MCP specification for remote servers
 """
 
 import os
 import json
-import uvicorn
-import secrets
+import time
 import asyncio
+import logging
 from typing import Dict, List, Any, Optional
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Depends, Security, Request
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi.responses import StreamingResponse, JSONResponse
-from pydantic import BaseModel
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import JSONResponse, StreamingResponse, RedirectResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 # Load environment variables
 load_dotenv()
 
-# Configuration from environment
-API_KEY = os.getenv("MCP_API_KEY", "dev-key-local-testing-only")
-SERVER_HOST = os.getenv("SERVER_HOST", "0.0.0.0")
-SERVER_PORT = int(os.getenv("SERVER_PORT", "8000"))
-SERVER_NAME = os.getenv("SERVER_NAME", "Knowledge Base")
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+# Configure detailed logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('mcp_debug.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# Configuration
+SERVER_NAME = os.getenv("SERVER_NAME", "Local Knowledge Base")
 
 # Sample knowledge base data
 SAMPLE_DATA = [
     {
         "id": "doc1",
         "title": "Python Best Practices",
-        "text": "Python best practices include using virtual environments, type hints, and docstrings."
+        "text": "Python best practices include using virtual environments, type hints, and docstrings. Virtual environments help isolate project dependencies, type hints improve code readability and catch errors early, and docstrings provide essential documentation for functions and classes.",
+        "url": None,
+        "metadata": {"category": "programming", "language": "python"}
     },
     {
-        "id": "doc2",
+        "id": "doc2", 
         "title": "FastAPI Overview",
-        "text": "FastAPI is a modern web framework for building APIs with Python 3.7+."
+        "text": "FastAPI is a modern web framework for building APIs with Python 3.7+. It provides automatic API documentation, type validation, and high performance through async/await support.",
+        "url": None,
+        "metadata": {"category": "framework", "language": "python"}
     },
     {
         "id": "doc3",
         "title": "Database Design",
-        "text": "Good database design involves normalization, indexing, and proper relationships."
+        "text": "Good database design involves normalization, indexing, and proper relationships. Normalization reduces redundancy, indexes improve query performance, and proper relationships maintain data integrity.",
+        "url": None,
+        "metadata": {"category": "database", "topic": "design"}
     },
     {
         "id": "doc4",
-        "title": "Security Guidelines",
-        "text": "Always validate input, use HTTPS, and follow the principle of least privilege."
+        "title": "Security Guidelines", 
+        "text": "Always validate input, use HTTPS, and follow the principle of least privilege. Input validation prevents injection attacks, HTTPS encrypts data in transit, and least privilege limits potential damage from breaches.",
+        "url": None,
+        "metadata": {"category": "security", "topic": "guidelines"}
     },
     {
         "id": "doc5",
         "title": "Testing Strategies",
-        "text": "Include unit tests, integration tests, and end-to-end tests in your test suite."
+        "text": "Include unit tests, integration tests, and end-to-end tests in your test suite. Unit tests verify individual components, integration tests check component interactions, and end-to-end tests validate complete workflows.",
+        "url": None,
+        "metadata": {"category": "testing", "topic": "strategies"}
     }
 ]
 
-# Pydantic models
-class SearchRequest(BaseModel):
-    query: str
-    
-class FetchRequest(BaseModel):
-    doc_id: str
+# Create lookup dictionary for quick access
+LOOKUP = {doc["id"]: doc for doc in SAMPLE_DATA}
 
-class ToolResponse(BaseModel):
-    result: str
-    status: str = "success"
-
-class MCPResponse(BaseModel):
-    tools: List[Dict[str, Any]]
-
-# FastAPI app
+# Initialize FastAPI app
 app = FastAPI(
     title=SERVER_NAME,
-    description="MCP-compatible Knowledge Base Server",
+    description="MCP Server for ChatGPT Deep Research - Streamable HTTP Transport",
     version="1.0.0"
 )
 
-# Security
-security = HTTPBearer()
-
-def verify_api_key(credentials: HTTPAuthorizationCredentials = Security(security)) -> bool:
-    """Verify the API key"""
-    if API_KEY == "dev-key-local-testing-only":
-        return True  # Skip validation in dev mode
-    if credentials.credentials != API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid API key")
-    return True
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.get("/")
 async def root():
-    """Root endpoint with server information"""
+    """Root endpoint"""
     return {
         "name": SERVER_NAME,
+        "description": "MCP Server for ChatGPT Deep Research",
         "version": "1.0.0",
-        "status": "running",
+        "protocol": "MCP-SSE",
+        "transport": "server-sent-events",
         "tools": ["search", "fetch"],
-        "documents": len(SAMPLE_DATA)
+        "documents": len(SAMPLE_DATA),
+        "mcp_endpoint": "/mcp"
     }
-
-@app.get("/tools", response_model=MCPResponse)
-async def list_tools(authorized: bool = Depends(verify_api_key)):
-    """List available MCP tools"""
-    tools = [
-        {
-            "name": "search",
-            "description": "Search the knowledge base for relevant documents",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Search query"
-                    }
-                },
-                "required": ["query"]
-            }
-        },
-        {
-            "name": "fetch",
-            "description": "Fetch a specific document by ID",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "doc_id": {
-                        "type": "string",
-                        "description": "Document ID to fetch"
-                    }
-                },
-                "required": ["doc_id"]
-            }
-        }
-    ]
-    return MCPResponse(tools=tools)
-
-@app.post("/tools/search", response_model=ToolResponse)
-async def search_tool(request: SearchRequest, authorized: bool = Depends(verify_api_key)):
-    """Search the knowledge base for relevant documents"""
-    query = request.query
-    results = []
-    
-    for doc in SAMPLE_DATA:
-        if query.lower() in doc["title"].lower() or query.lower() in doc["text"].lower():
-            results.append(doc)
-    
-    if not results:
-        return ToolResponse(result="No matching documents found.")
-    
-    formatted_results = []
-    for doc in results:
-        formatted_results.append(f"Title: {doc['title']}\nContent: {doc['text']}\n")
-    
-    result = "\n".join(formatted_results)
-    return ToolResponse(result=result)
-
-@app.post("/tools/fetch", response_model=ToolResponse)
-async def fetch_tool(request: FetchRequest, authorized: bool = Depends(verify_api_key)):
-    """Fetch a specific document by ID"""
-    doc_id = request.doc_id
-    doc = next((doc for doc in SAMPLE_DATA if doc["id"] == doc_id), None)
-    
-    if not doc:
-        return ToolResponse(
-            result=f"Document {doc_id} not found.",
-            status="error"
-        )
-    
-    result = f"Title: {doc['title']}\nContent: {doc['text']}"
-    return ToolResponse(result=result)
 
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
-    return {"status": "healthy", "timestamp": "2025-06-08"}
+    return {
+        "status": "healthy", 
+        "server": SERVER_NAME,
+        "timestamp": int(time.time()),
+        "tools_available": 2,
+        "documents": len(SAMPLE_DATA)
+    }
 
-@app.post("/sse")
-async def sse_endpoint(request: Request, authorized: bool = Depends(verify_api_key)):
-    """SSE endpoint for ChatGPT integration"""
+@app.post("/mcp")
+async def mcp_sse_endpoint(request: Request):
+    """
+    MCP SSE endpoint for ChatGPT Deep Research
+    Implements proper Server-Sent Events transport as specified by OpenAI
+    """
+    body_bytes = await request.body()
+    body_text = body_bytes.decode()
+    try:
+        data = json.loads(body_text)
+    except json.JSONDecodeError:
+        logger.error("Failed to parse JSON body")
+        return JSONResponse(status_code=400, content={"error": "Invalid JSON"})
+
+    method = data.get("method")
+    params = data.get("params", {})
+    request_id = data.get("id")
+
     async def event_generator():
-        while True:
-            if await request.is_disconnected():
-                break
+        try:
+            logger.info(f"Method: {method}, Params: {params}, ID: {request_id}")
 
-            # Process any incoming messages
-            try:
-                body = await request.json()
-                tool_name = body.get("name")
-                arguments = body.get("arguments", {})
-                
-                # Handle tool calls
-                if tool_name == "search":
-                    result = await search_tool(SearchRequest(query=arguments.get("query", "")))
-                elif tool_name == "fetch":
-                    result = await fetch_tool(FetchRequest(doc_id=arguments.get("doc_id", "")))
-                else:
-                    result = ToolResponse(result="Unknown tool", status="error")
-                
-                # Send the result
-                yield f"data: {json.dumps(result.dict())}\n\n"
-            except:
-                # Keep connection alive even if no message
-                yield f"data: {json.dumps({'status': 'alive'})}\n\n"
-            
-            await asyncio.sleep(1)
+            if method == "initialize":
+                logger.info("Processing initialize request")
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {
+                            "tools": {}
+                        },
+                        "serverInfo": {
+                            "name": SERVER_NAME,
+                            "version": "1.0.0"
+                        }
+                    }
+                }
+                yield f"data: {json.dumps(response)}\n\n"
+                await asyncio.sleep(0.1)
+
+            elif method == "notifications/initialized":
+                logger.info("Processing notifications/initialized")
+                # No response needed for notifications
+                return
+
+            elif method == "tools/list":
+                logger.info("Processing tools/list request")
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {
+                        "tools": [
+                            {
+                                "name": "search",
+                                "description": "Searches for resources using the provided query string and returns matching results.",
+                                "input_schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "query": {
+                                            "type": "string",
+                                            "description": "Search query."
+                                        }
+                                    },
+                                    "required": ["query"]
+                                },
+                                "output_schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "results": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "id": {"type": "string"},
+                                                    "title": {"type": "string"},
+                                                    "text": {"type": "string"},
+                                                    "url": {"type": ["string", "null"]}
+                                                },
+                                                "required": ["id", "title", "text"]
+                                            }
+                                        }
+                                    },
+                                    "required": ["results"]
+                                }
+                            },
+                            {
+                                "name": "fetch",
+                                "description": "Retrieves detailed content for a specific resource identified by the given ID.",
+                                "input_schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "id": {
+                                            "type": "string",
+                                            "description": "ID of the resource to fetch."
+                                        }
+                                    },
+                                    "required": ["id"]
+                                },
+                                "output_schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "id": {"type": "string"},
+                                        "title": {"type": "string"},
+                                        "text": {"type": "string"},
+                                        "url": {"type": ["string", "null"]},
+                                        "metadata": {
+                                            "type": ["object", "null"],
+                                            "additionalProperties": {"type": "string"}
+                                        }
+                                    },
+                                    "required": ["id", "title", "text"]
+                                }
+                            }
+                        ]
+                    }
+                }
+                yield f"data: {json.dumps(response)}\n\n"
+
+            elif method == "tools/call":
+                tool_name = params.get("name")
+                arguments = params.get("arguments", {})
+
+                logger.info(f"Processing tools/call request for tool: {tool_name}")
+                logger.info(f"Tool arguments: {arguments}")
+
+                # Validate arguments is a dictionary (not a string)
+                if not isinstance(arguments, dict):
+                    logger.error(f"Invalid arguments type: {type(arguments)}. Expected dict, got {type(arguments).__name__}")
+                    error_response = {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "error": {
+                            "code": -32602,
+                            "message": f"Invalid params: arguments must be an object, not {type(arguments).__name__}"
+                        }
+                    }
+                    yield f"data: {json.dumps(error_response)}\n\n"
+                    return
+
+                try:
+                    if tool_name == "search":
+                        # Return the raw tool result that matches the output_schema
+                        result = handle_search_sse(arguments.get("query", ""))
+                    elif tool_name == "fetch":
+                        # Return the raw tool result that matches the output_schema
+                        result = handle_fetch_sse(arguments.get("id", ""))
+                    else:
+                        logger.error(f"Unknown tool requested: {tool_name}")
+                        error_response = {
+                            "jsonrpc": "2.0",
+                            "id": request_id,
+                            "error": {
+                                "code": -32601,
+                                "message": f"Method not found: {tool_name}"
+                            }
+                        }
+                        yield f"data: {json.dumps(error_response)}\n\n"
+                        return
+
+                except Exception as e:
+                    logger.error(f"Tool execution error: {e}")
+                    error_response = {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "error": {
+                            "code": -32603,
+                            "message": f"Internal error: {str(e)}"
+                        }
+                    }
+                    yield f"data: {json.dumps(error_response)}\n\n"
+                    return
+
+                # Return the tool result directly as per MCP specification
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": result
+                }
+                yield f"data: {json.dumps(response)}\n\n"
+
+            else:
+                logger.error(f"Unknown method: {method}")
+                error_response = {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "error": {
+                        "code": -32601,
+                        "message": f"Method not found: {method}"
+                    }
+                }
+                yield f"data: {json.dumps(error_response)}\n\n"
+
+        except Exception as e:
+            logger.error(f"Exception in SSE endpoint: {e}")
+            error_response = {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {
+                    "code": -32603,
+                    "message": f"Internal error: {str(e)}"
+                }
+            }
+            yield f"data: {json.dumps(error_response)}\n\n"
 
     return StreamingResponse(
         event_generator(),
@@ -214,19 +332,84 @@ async def sse_endpoint(request: Request, authorized: bool = Depends(verify_api_k
         }
     )
 
+
+def handle_search_sse(query: str) -> Dict[str, Any]:
+    """Handle search tool execution for SSE - returns results in format expected by ChatGPT"""
+    logger.info(f"Executing SSE search with query: '{query}'")
+
+    query_lower = query.lower()
+    results = []
+
+    for doc in SAMPLE_DATA:
+        searchable_text = (
+            doc["title"].lower() + " " +
+            doc["text"].lower() + " " +
+            " ".join(str(v) for v in doc.get("metadata", {}).values()).lower()
+        )
+
+        if query_lower in searchable_text:
+            results.append({
+                "id": doc["id"],
+                "title": doc["title"],
+                "text": doc["text"][:200] + "..." if len(doc["text"]) > 200 else doc["text"],
+                "url": doc.get("url")
+            })
+
+    logger.info(f"SSE Search found {len(results)} results")
+    return {"results": results}
+
+def handle_fetch_sse(doc_id: str) -> Dict[str, Any]:
+    """Handle fetch tool execution for SSE"""
+    logger.info(f"Executing SSE fetch with document ID: '{doc_id}'")
+
+    if not doc_id:
+        logger.warning("Empty document ID received")
+        raise HTTPException(status_code=400, detail="Document ID is required")
+
+    if doc_id not in LOOKUP:
+        logger.warning(f"Document ID '{doc_id}' not found")
+        raise HTTPException(status_code=404, detail=f"Document with ID '{doc_id}' not found")
+
+    doc = LOOKUP[doc_id]
+    logger.info(f"Found document: {doc['title']}")
+
+    return {
+        "id": doc["id"],
+        "title": doc["title"],
+        "text": doc["text"],
+        "url": doc.get("url"),
+        "metadata": doc.get("metadata")
+    }
+
+# Backward compatibility functions for testing
+def handle_search(query: str) -> Dict[str, Any]:
+    """Handle search tool execution - for backward compatibility with tests"""
+    return handle_search_sse(query)
+
+def handle_fetch(doc_id: str) -> Dict[str, Any]:
+    """Handle fetch tool execution - for backward compatibility with tests"""
+    return handle_fetch_sse(doc_id)
+
+# Legacy SSE endpoint - redirects to Streamable HTTP
+@app.post("/sse")
+async def mcp_sse_endpoint(request: Request):
+    """SSE endpoint - redirects to Streamable HTTP for backward compatibility"""
+    logger.info("Request received at /sse endpoint, redirecting to /mcp")
+    return await mcp_sse_endpoint(request)
+
+# OAuth endpoints for ChatGPT connector compatibility
 @app.get("/.well-known/oauth-authorization-server")
 async def oauth_config():
     """OAuth authorization server configuration"""
+    base_url = "https://mcp.crsv.me"
     return JSONResponse({
-        "issuer": "https://mcp.crsv.me",
-        "authorization_endpoint": "https://mcp.crsv.me/oauth/authorize",
-        "token_endpoint": "https://mcp.crsv.me/oauth/token",
-        "registration_endpoint": "https://mcp.crsv.me/oauth/register",
-        "grant_types_supported": ["client_credentials", "authorization_code"],
-        "token_endpoint_auth_methods_supported": ["none"],
-        "service_documentation": "https://mcp.crsv.me/docs",
-        "response_types_supported": ["token", "code"],
-        "scopes_supported": ["tools.read", "tools.write"]
+        "issuer": base_url,
+        "authorization_endpoint": f"{base_url}/oauth/authorize",
+        "token_endpoint": f"{base_url}/oauth/token",
+        "registration_endpoint": f"{base_url}/oauth/register",
+        "grant_types_supported": ["authorization_code"],
+        "response_types_supported": ["code"],
+        "scopes_supported": ["read"]
     })
 
 @app.get("/oauth/authorize")
@@ -238,67 +421,47 @@ async def authorize_endpoint(
     state: str = None
 ):
     """OAuth authorization endpoint"""
-    if response_type == "code":
-        auth_code = secrets.token_urlsafe(32)
-        return JSONResponse({
-            "code": auth_code,
-            "state": state
-        })
-    else:
-        return JSONResponse({
-            "access_token": API_KEY,
-            "token_type": "Bearer",
-            "expires_in": 3600,
-            "scope": "tools.read tools.write",
-            "state": state
-        })
+    import secrets
+    auth_code = secrets.token_urlsafe(32)
+    redirect_uri_with_code = f"{redirect_uri}?code={auth_code}&state={state}"
+    return RedirectResponse(url=redirect_uri_with_code)
 
 @app.post("/oauth/register")
 async def register_client(request: Request):
     """OAuth client registration endpoint"""
-    try:
-        body = await request.json()
-        return JSONResponse({
-            "client_id": "mcp_client",
-            "client_secret": API_KEY,
-            "client_id_issued_at": 1683000000,
-            "client_secret_expires_at": 0,
-            "application_type": "web",
-            "grant_types": ["client_credentials"],
-            "token_endpoint_auth_method": "none",
-            "scope": "tools.read tools.write"
-        })
-    except:
-        raise HTTPException(status_code=400, detail="Invalid request")
+    return JSONResponse({
+        "client_id": "mcp_client",
+        "client_secret": "mcp_secret",
+        "application_type": "web",
+        "grant_types": ["authorization_code"],
+        "scope": "read"
+    })
 
 @app.post("/oauth/token")
 async def token_endpoint(request: Request):
     """OAuth token endpoint"""
     return JSONResponse({
-        "access_token": API_KEY,
+        "access_token": "mcp_access_token",
         "token_type": "Bearer",
         "expires_in": 3600,
-        "scope": "tools.read tools.write"
+        "scope": "read"
     })
 
 def main():
     """Run the server"""
-    if API_KEY == "dev-key-local-testing-only":
-        new_api_key = secrets.token_urlsafe(32)
-        print("⚠️  WARNING: Using development mode - API key validation disabled")
-        print(f"🔑 Generated API Key: {new_api_key}")
-        print("💡 Update MCP_API_KEY in .env file for production")
-    
     print(f"🔒 Starting {SERVER_NAME}...")
     print(f"🔍 Available tools: search, fetch")
     print(f"📊 Knowledge base: {len(SAMPLE_DATA)} documents")
-    print(f"🌐 Server will run on http://{SERVER_HOST}:{SERVER_PORT}")
+    print(f"✅ MCP Protocol: SSE Transport")
+    print(f"🌐 MCP Endpoint: /mcp")
+    print(f"🌐 Server will run on port 8000")
     
+    import uvicorn
     uvicorn.run(
         "mcp_server:app",
-        host=SERVER_HOST,
-        port=SERVER_PORT,
-        log_level=LOG_LEVEL.lower(),
+        host="0.0.0.0",
+        port=8000,
+        log_level="info",
         reload=False
     )
 
