@@ -189,10 +189,10 @@ async def mcp_sse_endpoint(request: Request):
                                             "items": {
                                                 "type": "object",
                                                 "properties": {
-                                                    "id": {"type": "string"},
-                                                    "title": {"type": "string"},
-                                                    "text": {"type": "string"},
-                                                    "url": {"type": ["string", "null"]}
+                                                    "id": {"type": "string", "description": "ID of the resource."},
+                                                    "title": {"type": "string", "description": "Title or headline of the resource."},
+                                                    "text": {"type": "string", "description": "Text snippet or summary from the resource."},
+                                                    "url": {"type": ["string", "null"], "description": "URL of the resource. Optional but needed for citations to work."}
                                                 },
                                                 "required": ["id", "title", "text"]
                                             }
@@ -217,13 +217,14 @@ async def mcp_sse_endpoint(request: Request):
                                 "output_schema": {
                                     "type": "object",
                                     "properties": {
-                                        "id": {"type": "string"},
-                                        "title": {"type": "string"},
-                                        "text": {"type": "string"},
-                                        "url": {"type": ["string", "null"]},
+                                        "id": {"type": "string", "description": "ID of the resource."},
+                                        "title": {"type": "string", "description": "Title or headline of the fetched resource."},
+                                        "text": {"type": "string", "description": "Complete textual content of the resource."},
+                                        "url": {"type": ["string", "null"], "description": "URL of the resource. Optional but needed for citations to work."},
                                         "metadata": {
                                             "type": ["object", "null"],
-                                            "additionalProperties": {"type": "string"}
+                                            "additionalProperties": {"type": "string"},
+                                            "description": "Optional metadata providing additional context."
                                         }
                                     },
                                     "required": ["id", "title", "text"]
