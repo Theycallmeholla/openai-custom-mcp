@@ -1,0 +1,24 @@
+# .htaccess file for proxying to MCP server
+# This should go in /home/wqt4uxigy2y4/public_html/mcp/.htaccess
+
+# Disable directory index files (like index.php, index.html)
+DirectoryIndex disabled
+
+# Enable rewrite engine
+RewriteEngine On
+
+# Proxy ALL requests to the FastAPI server, no exceptions
+RewriteRule ^(.*)$ http://127.0.0.1:8000/$1 [P,L]
+
+# Set headers for proper proxying
+Header always set Access-Control-Allow-Origin "*"
+Header always set Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
+Header always set Access-Control-Allow-Headers "Content-Type, Authorization"
+
+# Handle preflight OPTIONS requests
+RewriteCond %{REQUEST_METHOD} OPTIONS
+RewriteRule ^(.*)$ - [R=200,L]
+
+# Ensure the proxy module is loaded (if available)
+# LoadModule proxy_module modules/mod_proxy.so
+# LoadModule proxy_http_module modules/mod_proxy_http.so
