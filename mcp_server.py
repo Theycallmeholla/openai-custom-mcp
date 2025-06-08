@@ -219,14 +219,39 @@ async def oauth_config():
     """OAuth authorization server configuration"""
     return JSONResponse({
         "issuer": "https://mcp.crsv.me",
+        "authorization_endpoint": "https://mcp.crsv.me/oauth/authorize",
         "token_endpoint": "https://mcp.crsv.me/oauth/token",
         "registration_endpoint": "https://mcp.crsv.me/oauth/register",
-        "grant_types_supported": ["client_credentials"],
+        "grant_types_supported": ["client_credentials", "authorization_code"],
         "token_endpoint_auth_methods_supported": ["none"],
         "service_documentation": "https://mcp.crsv.me/docs",
-        "response_types_supported": ["token"],
+        "response_types_supported": ["token", "code"],
         "scopes_supported": ["tools.read", "tools.write"]
     })
+
+@app.get("/oauth/authorize")
+async def authorize_endpoint(
+    response_type: str,
+    client_id: str,
+    redirect_uri: str = None,
+    scope: str = None,
+    state: str = None
+):
+    """OAuth authorization endpoint"""
+    if response_type == "code":
+        auth_code = secrets.token_urlsafe(32)
+        return JSONResponse({
+            "code": auth_code,
+            "state": state
+        })
+    else:
+        return JSONResponse({
+            "access_token": API_KEY,
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "scope": "tools.read tools.write",
+            "state": state
+        })
 
 @app.post("/oauth/register")
 async def register_client(request: Request):
