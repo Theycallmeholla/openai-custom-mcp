@@ -72,8 +72,7 @@ class MCPResponse(BaseModel):
 app = FastAPI(
     title=SERVER_NAME,
     description="MCP-compatible Knowledge Base Server",
-    version="1.0.0",
-    root_path="/mcp"  # Add this line!
+    version="1.0.0"
 )
 
 # Security
@@ -182,7 +181,7 @@ async def sse_endpoint(request: Request, authorized: bool = Depends(verify_api_k
                 break
 
             # Process any incoming messages
-            if await request.body():
+            try:
                 body = await request.json()
                 tool_name = body.get("name")
                 arguments = body.get("arguments", {})
@@ -197,6 +196,9 @@ async def sse_endpoint(request: Request, authorized: bool = Depends(verify_api_k
                 
                 # Send the result
                 yield f"data: {json.dumps(result.dict())}\n\n"
+            except:
+                # Keep connection alive even if no message
+                yield f"data: {json.dumps({'status': 'alive'})}\n\n"
             
             await asyncio.sleep(1)
 
