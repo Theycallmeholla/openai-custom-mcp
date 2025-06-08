@@ -78,13 +78,26 @@ def test_tools_list():
     if response.status_code == 200:
         content = response.text
         print("Tools list response:")
-        print(content[:500] + "..." if len(content) > 500 else content)
+        # Print the full content, no truncation
+        print(content)
         print()
     else:
         print(f"❌ Request failed: {response.status_code}")
 
 if __name__ == "__main__":
     print("🧪 Testing MCP Server Implementation\n")
-    test_mcp_initialize()
+    all_passed = True
+    try:
+        test_mcp_initialize()
+        print("-" * 50)
+        test_tools_list()
+        # Add more test calls here if needed
+    except Exception as e:
+        print(f"❌ TEST SUITE FAILED: An exception occurred: {e}")
+        all_passed = False
+
     print("-" * 50)
-    test_tools_list()
+    if all_passed:
+        print("✅ ALL TESTS PASSED")
+    else:
+        print("❌ SOME TESTS FAILED")
